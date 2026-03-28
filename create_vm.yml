@@ -1,0 +1,90 @@
+- name: Create VM in vCenter
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    vcenter_host: "{{ vcenter_host }}"
+    vcenter_user: "{{ vcenter_user }}"
+    vcenter_pass: "{{ vcenter_pass }}"
+
+  tasks:
+
+    - name: Create VM
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_host }}"
+        username: "{{ vcenter_user }}"
+        password: "{{ vcenter_pass }}"
+        validate_certs: no
+
+        name: "{{ vm_name }}"
+        cluster: "{{ cluster }}"
+        esxi_hostname: "{{ esxi_host }}"
+        datastore: "{{ datastore }}"
+        template: "{{ template }}"
+
+        hardware:
+          memory_mb: "{{ ram }}"
+          num_cpus: "{{ cpu }}"
+
+        disk:
+          - size_gb: "{{ disk }}"
+            type: thin
+
+        networks:
+          - name: "{{ network }}"
+            type: dhcp
+
+        state: poweredon
+
+    - name: Wait for SSH
+      wait_for:
+        host: "{{ vm_name }}"
+        port: 22
+        timeout: 300
+
+    - name: Add host
+      add_host:
+        name: "{{ vm_name }}"
+        groups: provisioned
+
+- name: Configure Linux
+  hosts: provisioned
+  become: yes
+
+  tasks:
+
+    - name: Install RHEL packages
+      when: os_type == "rhel"
+      yum:
+        name:
+          - adcli
+          - realmd
+          - sssd
+          - oddjob
+          - oddjob-mkhomedir
+          - samba-common-tools
+          - krb5-workstation
+          - authselect-compat
+        state: present
+
+    - name: Install Ubuntu packages
+      when: os_type == "ubuntu"
+      apt:
+        name:
+          - sssd-ad
+          - sssd-tools
+          - realmd
+          - adcli
+        update_cache: yes
+
+    - name: Join domain
+      command: realm join shaik.com -U "{{ domain_user }}"
+      ignore_errors: yes
+
+    - name: Enable admin users
+      when: enable_admin == "yes"
+      user:
+        name: "{{ item }}"
+        groups: wheel
+        append: yes
+      loop: "{{ admin_users.split(',') }}"
