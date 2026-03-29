@@ -7,6 +7,10 @@
   gather_facts: no
   vars:
     domain_name: "shaik.com"
+    # AWX VMware vCenter credential injects these as environment variables
+    vcenter_host: "{{ lookup('env', 'VMWARE_HOST') }}"
+    vcenter_user: "{{ lookup('env', 'VMWARE_USER') }}"
+    vcenter_pass: "{{ lookup('env', 'VMWARE_PASSWORD') }}"
 
   tasks:
     - name: Create VM
