@@ -21,7 +21,6 @@
         validate_certs: no
         name: "{{ vm_name }}"
         cluster: "{{ clusters }}"
-        esxi_hostname: "{{ esxi_host }}"
         datastore: "{{ Datastore }}"
         template: "{{ Templates }}"
         hardware:
