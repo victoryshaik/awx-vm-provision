@@ -1,11 +1,10 @@
+---
 - name: Create VM in vCenter
   hosts: localhost
   gather_facts: no
 
   vars:
-    vcenter_host: "{{ vcenter_host }}"
-    vcenter_user: "{{ vcenter_user }}"
-    vcenter_pass: "{{ vcenter_pass }}"
+    domain_name: "shaik.com"
 
   tasks:
 
@@ -17,10 +16,10 @@
         validate_certs: no
 
         name: "{{ vm_name }}"
-        cluster: "{{ cluster }}"
+        cluster: "{{ clusters }}"
         esxi_hostname: "{{ esxi_host }}"
-        datastore: "{{ datastore }}"
-        template: "{{ template }}"
+        datastore: "{{ Datastore }}"
+        template: "{{ Templates }}"
 
         hardware:
           memory_mb: "{{ ram }}"
@@ -31,8 +30,13 @@
             type: thin
 
         networks:
-          - name: "{{ network }}"
+          - name: "{{ vm_network }}"
             type: dhcp
+
+        annotation: |
+          Primary Owner: {{ owner_primary }}
+          Secondary Owner: {{ owner_secondary }}
+          Business Owner: {{ owner_business }}
 
         state: poweredon
 
@@ -42,17 +46,25 @@
         port: 22
         timeout: 300
 
-    - name: Add host
+    - name: Add host to inventory
       add_host:
         name: "{{ vm_name }}"
         groups: provisioned
+
+# =====================================================
 
 - name: Configure Linux
   hosts: provisioned
   become: yes
 
+  vars:
+    domain_name: "shaik.com"
+
   tasks:
 
+    # -------------------------------
+    # Install packages
+    # -------------------------------
     - name: Install RHEL packages
       when: os_type == "rhel"
       yum:
@@ -77,14 +89,43 @@
           - adcli
         update_cache: yes
 
+    # -------------------------------
+    # Join domain
+    # -------------------------------
     - name: Join domain
-      command: realm join shaik.com -U "{{ domain_user }}"
-      ignore_errors: yes
+      command: realm join {{ domain_name }} -U "{{ domain_user }}"
+      register: domain_join
+      changed_when: "'already joined' not in domain_join.stdout"
+      failed_when: domain_join.rc != 0 and
+                   'already joined' not in domain_join.stdout
+
+    # -------------------------------
+    # Create local admin user
+    # -------------------------------
+    - name: Create local user
+      user:
+        name: localadmin
+        password: "{{ 'test@123' | password_hash('sha512') }}"
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Add local user to admin group
+      user:
+        name: localadmin
+        groups: "{{ 'wheel' if os_type == 'rhel' else 'sudo' }}"
+        append: yes
+
+    # -------------------------------
+    # Admin users from AWX
+    # -------------------------------
+    - name: Set admin group
+      set_fact:
+        admin_group: "{{ 'wheel' if os_type == 'rhel' else 'sudo' }}"
 
     - name: Enable admin users
       when: enable_admin == "yes"
       user:
         name: "{{ item }}"
-        groups: wheel
+        groups: "{{ admin_group }}"
         append: yes
-      loop: "{{ admin_users.split(',') }}"
+      loop: "{{ sudo_users.split(',') }}"
