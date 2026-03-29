@@ -1,96 +1,71 @@
 ---
+# =====================================================
+# Play 1: Create VM in vCenter
+# =====================================================
 - name: Create VM in vCenter
   hosts: localhost
   gather_facts: no
-
   vars:
-    # vCenter details
-    vcenter_host: "172.16.10.150"
-    vcenter_user: "administrator@vsphere.local"
-    vcenter_pass: "Victory@2015"
-
-    # VM details
-    vm_name: "test-vm"
-    clusters: "ESXI-Cluster"
-    Datastore: "store(1)"
-    Templates: "ubuntu-template"
-
-    # Hardware
-    ram: 2048
-    cpu: 2
-    disk: 20
-
-    # Network
-    vm_network: "VM Network"
-
-    # Metadata
-    owner_primary: "admin"
-    owner_secondary: "admin2"
-    owner_business: "business"
-
-    # OS / config
-    os_type: "rhel"
     domain_name: "shaik.com"
-    domain_user: "admin@shaik.com"
-    enable_admin: "yes"
-    sudo_users: "user1,user2"
 
   tasks:
-
     - name: Create VM
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_host }}"
         username: "{{ vcenter_user }}"
         password: "{{ vcenter_pass }}"
         validate_certs: no
-
         name: "{{ vm_name }}"
         cluster: "{{ clusters }}"
+        esxi_hostname: "{{ esxi_host }}"
         datastore: "{{ Datastore }}"
         template: "{{ Templates }}"
-
         hardware:
-          memory_mb: {{ ram }}
-          num_cpus: {{ cpu }}
-
+          memory_mb: "{{ ram | int }}"
+          num_cpus: "{{ cpu | int }}"
         disk:
-          - size_gb: {{ disk }}
+          - size_gb: "{{ disk | int }}"
             type: thin
-
         networks:
           - name: "{{ vm_network }}"
             type: dhcp
-
         annotation: |
           Primary Owner: {{ owner_primary }}
           Secondary Owner: {{ owner_secondary }}
           Business Owner: {{ owner_business }}
-
         state: poweredon
-      register: vm_output
+        wait_for_ip_address: yes
+      register: vm_result
 
-    # -------------------------------
-    # Wait for SSH (better approach)
-    # -------------------------------
-    - name: Wait for SSH
+    - name: Wait for SSH to become available
       wait_for:
-        host: "{{ vm_name }}"
+        host: "{{ vm_result.instance.ipv4 }}"
         port: 22
         timeout: 300
+        delay: 10
 
-    - name: Add host to inventory
+    - name: Add VM to in-memory inventory
       add_host:
         name: "{{ vm_name }}"
+        ansible_host: "{{ vm_result.instance.ipv4 }}"
+        ansible_user: "{{ vm_ssh_user | default('root') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | default(omit) }}"
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
         groups: provisioned
 
 # =====================================================
-
+# Play 2: Configure Linux
+# =====================================================
 - name: Configure Linux
   hosts: provisioned
   become: yes
+  vars:
+    domain_name: "shaik.com"
 
   tasks:
-
+    # -------------------------------
+    # Install packages
+    # -------------------------------
     - name: Install RHEL packages
       when: os_type == "rhel"
       yum:
@@ -115,17 +90,25 @@
           - adcli
         update_cache: yes
 
+    # -------------------------------
+    # Join domain
+    # -------------------------------
     - name: Join domain
-      command: realm join {{ domain_name }} -U "{{ domain_user }}"
+      shell: echo "{{ domain_password }}" | realm join {{ domain_name }} -U "{{ domain_user }}" --stdin
       register: domain_join
-      changed_when: "'already joined' not in domain_join.stdout"
-      failed_when: domain_join.rc != 0 and
-                   'already joined' not in domain_join.stdout
+      changed_when: "'already joined' not in domain_join.stderr"
+      failed_when:
+        - domain_join.rc != 0
+        - "'already joined' not in domain_join.stderr"
+      no_log: true
 
-    - name: Create local user
+    # -------------------------------
+    # Create local admin user
+    # -------------------------------
+    - name: Create local admin user
       user:
         name: localadmin
-        password: "{{ 'test@123' | password_hash('sha512') }}"
+        password: "{{ local_admin_password | password_hash('sha512') }}"
         shell: /bin/bash
         create_home: yes
 
@@ -135,14 +118,17 @@
         groups: "{{ 'wheel' if os_type == 'rhel' else 'sudo' }}"
         append: yes
 
-    - name: Set admin group
+    # -------------------------------
+    # Admin users from AWX survey
+    # -------------------------------
+    - name: Set admin group based on OS
       set_fact:
         admin_group: "{{ 'wheel' if os_type == 'rhel' else 'sudo' }}"
 
-    - name: Enable admin users
+    - name: Enable admin users from sudo_users list
       when: enable_admin == "yes"
       user:
         name: "{{ item }}"
         groups: "{{ admin_group }}"
         append: yes
-      loop: "{{ sudo_users.split(',') }}"
+      loop: "{{ sudo_users.split(',') | map('trim') | list }}"
