@@ -7,6 +7,7 @@
   gather_facts: no
   vars:
     domain_name: "shaik.com"
+    datacenter: "Datacenter 2"
     folder: "/Datacenter 2/vm"
     # AWX VMware vCenter credential injects these as environment variables
     vcenter_host: "{{ lookup('env', 'VMWARE_HOST') }}"
@@ -20,6 +21,7 @@
         username: "{{ vcenter_user }}"
         password: "{{ vcenter_pass }}"
         validate_certs: no
+        datacenter: "{{ datacenter }}"
         name: "{{ vm_name }}"
         cluster: "{{ clusters }}"
         datastore: "{{ Datastore }}"
